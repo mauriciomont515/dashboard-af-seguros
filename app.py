@@ -3,7 +3,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 import os
-import plotly.express as px  # <-- La nueva magia visual
+import plotly.express as px
 
 # --- 1. CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="AF Seguros | Rendimiento", page_icon="🛡️", layout="wide")
@@ -23,20 +23,17 @@ def cargar_datos_completos():
     try:
         scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
         
-        # --- NUEVA LÓGICA DE DETECCIÓN (LOCAL VS NUBE) ---
         ruta_actual = os.path.dirname(os.path.abspath(__file__))
         ruta_json = os.path.join(ruta_actual, 'credenciales_google.json')
         
-        # 1. Verificamos si el archivo físico existe (Estamos en tu PC local)
         if os.path.exists(ruta_json):
             credenciales = Credentials.from_service_account_file(ruta_json, scopes=scopes)
-        # 2. Si el archivo no existe (Estamos en la Nube de Streamlit)
         else:
             credenciales = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
             
         cliente = gspread.authorize(credenciales)
         
-        # ⚠️ AQUÍ DEBES PEGAR TU URL DEL EXCEL DE AF SEGUROS DE NUEVO
+        # ⚠️ AQUÍ DEBES PEGAR TU URL DEL EXCEL DE AF SEGUROS
         url_excel = 'https://docs.google.com/spreadsheets/d/1EfwZDbo8ZzAthOqdcLp3FMrZW10BRWKpbADqknlI470/edit'
         hoja_calculo = cliente.open_by_url(url_excel) 
         
@@ -56,6 +53,8 @@ def cargar_datos_completos():
             df_posts = pd.DataFrame(datos_posts[1:], columns=datos_posts[0])
             df_posts['Likes'] = pd.to_numeric(df_posts['Likes'], errors='coerce').fillna(0)
             df_posts['Comentarios'] = pd.to_numeric(df_posts['Comentarios'], errors='coerce').fillna(0)
+            # NUEVO: Convertimos la fecha de los posts a formato calendario
+            df_posts['Fecha'] = pd.to_datetime(df_posts['Fecha'], errors='coerce') 
             
         return df_hist, df_posts
     except Exception as e:
@@ -72,66 +71,108 @@ df_hist, df_posts = cargar_datos_completos()
 if df_hist.empty and df_posts.empty:
     st.info("⏳ Esperando datos... Asegúrate de haber corrido el extractor de Meta.")
 else:
-    # --- CREACIÓN DE LAS PESTAÑAS (TABS) ---
+    # --- NUEVO: SISTEMA DE FILTRADO DE FECHAS ---
+    # Sacamos la fecha más vieja y la más nueva para ponerlas de límite
+    min_date = df_hist['Fecha'].min().date()
+    max_date = df_hist['Fecha'].max().date()
+
+    col_calendario, col_espacio = st.columns([1, 2]) # Hace que el calendario no ocupe toda la pantalla
+    with col_calendario:
+        rango_fechas = st.date_input(
+            "🗓️ Rango de Análisis",
+            value=(min_date, max_date),
+            min_value=min_date,
+            max_value=max_date
+        )
+
+    # Lógica: Si el usuario seleccionó inicio y fin, podamos los datos
+    if len(rango_fechas) == 2:
+        fecha_inicio, fecha_fin = rango_fechas
+        fecha_inicio = pd.to_datetime(fecha_inicio)
+        fecha_fin = pd.to_datetime(fecha_fin)
+        
+        df_hist_filt = df_hist[(df_hist['Fecha'] >= fecha_inicio) & (df_hist['Fecha'] <= fecha_fin)]
+        df_posts_filt = df_posts[(df_posts['Fecha'] >= fecha_inicio) & (df_posts['Fecha'] <= fecha_fin)]
+    else:
+        df_hist_filt = df_hist
+        df_posts_filt = df_posts
+
+    st.markdown("<br>", unsafe_allow_html=True) # Un saltico de línea para respirar
+
+    # --- TABS CON DATOS FILTRADOS ---
     tab1, tab2 = st.tabs(["📊 Resumen General", "🏆 Top Performance"])
 
-    # --- PESTAÑA 1: KPIs y Gráficas ---
     with tab1:
-        if not df_hist.empty:
-            ultima_fecha = df_hist['Fecha'].max()
-            datos_recientes = df_hist[df_hist['Fecha'] == ultima_fecha]
-            
-            alcance_hoy = datos_recientes[datos_recientes['Metrica'] == 'reach']['Valor'].sum()
-            vistas_hoy = datos_recientes[datos_recientes['Metrica'] == 'profile_views']['Valor'].sum()
+        if not df_hist_filt.empty:
+            # Ahora los KPIs suman TODO lo que pasó en ese rango de fechas
+            alcance_periodo = df_hist_filt[df_hist_filt['Metrica'] == 'reach']['Valor'].sum()
+            vistas_periodo = df_hist_filt[df_hist_filt['Metrica'] == 'profile_views']['Valor'].sum()
 
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric(label="Alcance Diario (Reach)", value=f"{int(alcance_hoy):,}")
+                st.metric(label="Alcance Total (Periodo)", value=f"{int(alcance_periodo):,}")
             with col2:
-                st.metric(label="Vistas del Perfil", value=f"{int(vistas_hoy):,}")
+                st.metric(label="Vistas del Perfil (Periodo)", value=f"{int(vistas_periodo):,}")
             with col3:
-                st.metric(label="Última Actualización", value=ultima_fecha.strftime('%Y-%m-%d'))
+                # Mostrar los días analizados
+                dias_analizados = (df_hist_filt['Fecha'].max() - df_hist_filt['Fecha'].min()).days + 1
+                st.metric(label="Días Analizados", value=f"{dias_analizados}")
 
             st.markdown("<br>", unsafe_allow_html=True)
             st.subheader("Tendencia de Crecimiento")
             
-            # --- NUEVA GRÁFICA INTERACTIVA CON PLOTLY ---
-            df_grafico = df_hist.pivot_table(index='Fecha', columns='Metrica', values='Valor', aggfunc='sum')
+            df_grafico = df_hist_filt.pivot_table(index='Fecha', columns='Metrica', values='Valor', aggfunc='sum')
             
             fig = px.line(
-                df_grafico, 
-                x=df_grafico.index, 
-                y=df_grafico.columns,
-                markers=True, # Le pone puntitos a la línea
-                color_discrete_sequence=['#0047AB', '#00C49F'] # Colores más corporativos
+                df_grafico, x=df_grafico.index, y=df_grafico.columns,
+                markers=True, color_discrete_sequence=['#0047AB', '#00C49F']
             )
-            # Limpiamos el fondo para que se vea minimalista
             fig.update_layout(
-                plot_bgcolor="rgba(0,0,0,0)", 
-                paper_bgcolor="rgba(0,0,0,0)",
-                xaxis_title="", 
-                yaxis_title="",
-                hovermode="x unified" # Hace que una línea siga tu mouse
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                xaxis_title="", yaxis_title="", hovermode="x unified"
             )
-            # Le quitamos la cuadrícula fea
             fig.update_xaxes(showgrid=False)
             fig.update_yaxes(showgrid=True, gridcolor='lightgray')
             
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("No hay datos de métricas generales para este rango de fechas.")
 
-    # --- PESTAÑA 2: Ranking de Posts ---
+# --- PESTAÑA 2: Ranking de Posts ---
     with tab2:
-        if not df_posts.empty:
-            st.subheader("🏆 Ranking de Publicaciones")
-            df_posts_ordenado = df_posts.sort_values(by="Likes", ascending=False).reset_index(drop=True)
+        if not df_posts_filt.empty:
+            st.subheader("🏆 Ranking de Publicaciones (Top Performance)")
             
+            # Hacemos una copia de los datos filtrados
+            df_posts_ordenado = df_posts_filt.copy()
+            
+            # 1. LA MAGIA MATEMÁTICA: Sumamos Likes + Comentarios
+            df_posts_ordenado['Interacciones'] = df_posts_ordenado['Likes'] + df_posts_ordenado['Comentarios']
+            
+            # 2. Ordenamos el ranking usando esta nueva métrica súper poderosa
+            df_posts_ordenado = df_posts_ordenado.sort_values(by="Interacciones", ascending=False).reset_index(drop=True)
+            df_posts_ordenado['Fecha'] = df_posts_ordenado['Fecha'].dt.strftime('%Y-%m-%d')
+            
+            # 3. Sacamos el récord máximo para calibrar la barra de progreso
+            max_interacciones = int(df_posts_ordenado['Interacciones'].max())
+            
+            # 4. Inyectamos la tabla con la nueva barra visual
             st.dataframe(
                 df_posts_ordenado,
                 column_config={
-                    "Link": st.column_config.LinkColumn("Ir al Post (Clic aquí)"),
+                    "Link": st.column_config.LinkColumn("Ir al Post"),
                     "Likes": st.column_config.NumberColumn("❤️ Likes", format="%d"),
-                    "Comentarios": st.column_config.NumberColumn("💬 Comentarios", format="%d")
+                    "Comentarios": st.column_config.NumberColumn("💬 Coment.", format="%d"),
+                    "Interacciones": st.column_config.ProgressColumn(
+                        "🔥 Impacto Total",
+                        help="Suma de Likes y Comentarios. La barra muestra el nivel frente al post más exitoso.",
+                        format="%d",
+                        min_value=0,
+                        max_value=max_interacciones
+                    )
                 },
                 use_container_width=True,
                 hide_index=True 
             )
+        else:
+            st.warning("No se encontraron publicaciones en este rango de fechas.")
