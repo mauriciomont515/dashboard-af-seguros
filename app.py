@@ -91,6 +91,14 @@ else:
         fecha_inicio = pd.to_datetime(fecha_inicio)
         fecha_fin = pd.to_datetime(fecha_fin)
         
+        # --- BLINDAJE ANTI-ERRORES PARA LA NUBE ---
+        # Forzamos la conversión a formato fecha aquí mismo 
+        # por si la memoria caché de Streamlit guardó texto
+        df_hist['Fecha'] = pd.to_datetime(df_hist['Fecha'], errors='coerce')
+        if not df_posts.empty and 'Fecha' in df_posts.columns:
+            df_posts['Fecha'] = pd.to_datetime(df_posts['Fecha'], errors='coerce')
+        # ------------------------------------------
+        
         df_hist_filt = df_hist[(df_hist['Fecha'] >= fecha_inicio) & (df_hist['Fecha'] <= fecha_fin)]
         df_posts_filt = df_posts[(df_posts['Fecha'] >= fecha_inicio) & (df_posts['Fecha'] <= fecha_fin)]
     else:
