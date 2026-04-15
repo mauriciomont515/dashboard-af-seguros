@@ -91,14 +91,6 @@ else:
         fecha_inicio = pd.to_datetime(fecha_inicio)
         fecha_fin = pd.to_datetime(fecha_fin)
         
-        # --- BLINDAJE ANTI-ERRORES PARA LA NUBE ---
-        # Forzamos la conversión a formato fecha aquí mismo 
-        # por si la memoria caché de Streamlit guardó texto
-        df_hist['Fecha'] = pd.to_datetime(df_hist['Fecha'], errors='coerce')
-        if not df_posts.empty and 'Fecha' in df_posts.columns:
-            df_posts['Fecha'] = pd.to_datetime(df_posts['Fecha'], errors='coerce')
-        # ------------------------------------------
-        
         df_hist_filt = df_hist[(df_hist['Fecha'] >= fecha_inicio) & (df_hist['Fecha'] <= fecha_fin)]
         df_posts_filt = df_posts[(df_posts['Fecha'] >= fecha_inicio) & (df_posts['Fecha'] <= fecha_fin)]
     else:
@@ -112,22 +104,71 @@ else:
 
     with tab1:
         if not df_hist_filt.empty:
-            # Ahora los KPIs suman TODO lo que pasó en ese rango de fechas
-            alcance_periodo = df_hist_filt[df_hist_filt['Metrica'] == 'reach']['Valor'].sum()
-            vistas_periodo = df_hist_filt[df_hist_filt['Metrica'] == 'profile_views']['Valor'].sum()
+            # 1. Totales del periodo actual
+            alcance_periodo = int(df_hist_filt[df_hist_filt['Metrica'] == 'reach']['Valor'].sum())
+            vistas_periodo = int(df_hist_filt[df_hist_filt['Metrica'] == 'profile_views']['Valor'].sum())
 
+            # 2. LA MAGIA MATEMÁTICA: Viaje al pasado para comparar
+            delta_alcance = 0
+            delta_vistas = 0
+            porcentaje_alcance = 0
+            dias_analizados = (df_hist_filt['Fecha'].max() - df_hist_filt['Fecha'].min()).days + 1
+            
+            if len(rango_fechas) == 2:
+                fecha_fin_prev = pd.to_datetime(rango_fechas[0]) - pd.Timedelta(days=1)
+                fecha_inicio_prev = fecha_fin_prev - pd.Timedelta(days=dias_analizados - 1)
+                
+                df_hist_prev = df_hist[(df_hist['Fecha'] >= fecha_inicio_prev) & (df_hist['Fecha'] <= fecha_fin_prev)]
+                
+                if not df_hist_prev.empty:
+                    alcance_prev = int(df_hist_prev[df_hist_prev['Metrica'] == 'reach']['Valor'].sum())
+                    vistas_prev = int(df_hist_prev[df_hist_prev['Metrica'] == 'profile_views']['Valor'].sum())
+                    
+                    delta_alcance = alcance_periodo - alcance_prev
+                    delta_vistas = vistas_periodo - vistas_prev
+                    
+                    if alcance_prev > 0:
+                        porcentaje_alcance = (delta_alcance / alcance_prev) * 100
+
+            # 3. INTERFAZ: Las Flechitas de la Tranquilidad
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric(label="Alcance Total (Periodo)", value=f"{int(alcance_periodo):,}")
+                st.metric(
+                    label="Alcance Total (Periodo)", 
+                    value=f"{alcance_periodo:,}", 
+                    delta=f"{delta_alcance:,} vs periodo anterior" if delta_alcance != 0 else None,
+                    help="Cantidad de personas únicas que vieron tu contenido."
+                )
             with col2:
-                st.metric(label="Vistas del Perfil (Periodo)", value=f"{int(vistas_periodo):,}")
+                st.metric(
+                    label="Vistas del Perfil", 
+                    value=f"{vistas_periodo:,}", 
+                    delta=f"{delta_vistas:,} vs periodo anterior" if delta_vistas != 0 else None,
+                    help="Veces que entraron a ver tu perfil de Instagram."
+                )
             with col3:
-                # Mostrar los días analizados
-                dias_analizados = (df_hist_filt['Fecha'].max() - df_hist_filt['Fecha'].min()).days + 1
                 st.metric(label="Días Analizados", value=f"{dias_analizados}")
 
             st.markdown("<br>", unsafe_allow_html=True)
+            
+            # 4. EL TRADUCTOR BITÁCORA (Insight Automático)
+            st.subheader("💡 Resumen Ejecutivo")
+            
+            # Lógica para definir si el texto es de felicitación o de alerta
+            tendencia = "un aumento" if delta_alcance > 0 else "una disminución" if delta_alcance < 0 else "un mantenimiento"
+            color_caja = "success" if delta_alcance >= 0 else "warning"
+            
+            mensaje = f"Durante los últimos **{dias_analizados} días**, la marca AF Seguros ha logrado aparecer en la pantalla de **{alcance_periodo:,} personas**. Esto representa **{tendencia} del {abs(porcentaje_alcance):.1f}%** frente al periodo inmediatamente anterior. La estrategia de posicionamiento orgánico está en marcha."
+            
+            if color_caja == "success":
+                st.success(mensaje)
+            else:
+                st.warning(mensaje)
+
+            st.markdown("<br>", unsafe_allow_html=True)
             st.subheader("Tendencia de Crecimiento")
+            
+            # ... (AQUÍ SIGUE TU CÓDIGO INTACTO DE LA GRÁFICA FIG = PX.LINE...)
             
             df_grafico = df_hist_filt.pivot_table(index='Fecha', columns='Metrica', values='Valor', aggfunc='sum')
             
